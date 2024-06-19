@@ -21,42 +21,89 @@ from model import *
 from utils import *
 from vggmodel import *
 from resnetcifar import *
+from opacus.grad_sample import GradSampleModule
+
 
 def get_args():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Federated Learning with Differential Privacy and Enhanced Options")
+
+    # Combined federated and model arguments from both programs
     parser.add_argument('--model', type=str, default='mlp', help='neural network used in training')
     parser.add_argument('--dataset', type=str, default='mnist', help='dataset used for training')
-    parser.add_argument('--net_config', type=lambda x: list(map(int, x.split(', '))))
-    parser.add_argument('--partition', type=str, default='homo', help='the data partitioning strategy')
+    parser.add_argument('--epochs', type=int, default=5, help='number of local epochs')
     parser.add_argument('--batch-size', type=int, default=64, help='input batch size for training (default: 64)')
     parser.add_argument('--lr', type=float, default=0.01, help='learning rate (default: 0.01)')
-    parser.add_argument('--epochs', type=int, default=5, help='number of local epochs')
-    parser.add_argument('--n_parties', type=int, default=2,  help='number of workers in a distributed cluster')
+
+    # Arguments from Program 1
+    parser.add_argument('--net_config', type=lambda x: list(map(int, x.split(', '))))
+    parser.add_argument('--partition', type=str, default='homo', help='the data partitioning strategy')
+    parser.add_argument('--n_parties', type=int, default=2, help='number of workers in a distributed cluster')
     parser.add_argument('--alg', type=str, default='fedavg',
-                            help='fl algorithms: fedavg/fedprox/scaffold/fednova/moon')
-    parser.add_argument('--use_projection_head', type=bool, default=False, help='whether add an additional header to model or not (see MOON)')
+                        help='FL algorithms: fedavg/fedprox/scaffold/fednova/moon')
+    parser.add_argument('--use_projection_head', type=bool, default=False,
+                        help='whether add an additional header to model or not (see MOON)')
     parser.add_argument('--out_dim', type=int, default=256, help='the output dimension for the projection layer')
     parser.add_argument('--loss', type=str, default='contrastive', help='for moon')
     parser.add_argument('--temperature', type=float, default=0.5, help='the temperature parameter for contrastive loss')
-    parser.add_argument('--comm_round', type=int, default=50, help='number of maximum communication roun')
-    parser.add_argument('--is_same_initial', type=int, default=1, help='Whether initial all the models with the same parameters in fedavg')
+    parser.add_argument('--comm_round', type=int, default=50, help='number of maximum communication rounds')
+    parser.add_argument('--is_same_initial', type=int, default=1,
+                        help='Whether initial all the models with the same parameters in fedavg')
     parser.add_argument('--init_seed', type=int, default=0, help="Random seed")
-    parser.add_argument('--dropout_p', type=float, required=False, default=0.0, help="Dropout probability. Default=0.0")
-    parser.add_argument('--datadir', type=str, required=False, default="./data/", help="Data directory")
+    parser.add_argument('--dropout_p', type=float, default=0.0, help="Dropout probability. Default=0.0")
     parser.add_argument('--reg', type=float, default=1e-5, help="L2 regularization strength")
-    parser.add_argument('--logdir', type=str, required=False, default="./logs/", help='Log directory path')
-    parser.add_argument('--modeldir', type=str, required=False, default="./models/", help='Model directory path')
-    parser.add_argument('--beta', type=float, default=0.5, help='The parameter for the dirichlet distribution for data partitioning')
-    parser.add_argument('--device', type=str, default='cuda:0', help='The device to run the program')
-    parser.add_argument('--log_file_name', type=str, default=None, help='The log file name')
-    parser.add_argument('--optimizer', type=str, default='sgd', help='the optimizer')
     parser.add_argument('--mu', type=float, default=0.001, help='the mu parameter for fedprox')
     parser.add_argument('--noise', type=float, default=0, help='how much noise we add to some party')
-    parser.add_argument('--noise_type', type=str, default='level', help='Different level of noise or different space of noise')
+    parser.add_argument('--noise_type', type=str, default='level',
+                        help='Different level of noise or different space of noise')
     parser.add_argument('--rho', type=float, default=0, help='Parameter controlling the momentum SGD')
     parser.add_argument('--sample', type=float, default=1, help='Sample ratio for each communication round')
+    parser.add_argument('--beta', type=float, default=0.5,
+                        help='The parameter for the dirichlet distribution for data partitioning')
+
+    # Unique arguments from Program 2
+    parser.add_argument('--resnet_version', type=str, default='resnet18',
+                        choices=['resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152'],
+                        help="Specific version of ResNet model to use (e.g., resnet18, resnet34, resnet50, resnet101, resnet152).")
+    parser.add_argument('--num_users', type=int, default=100, help="Number of users: K.")
+    parser.add_argument('--frac', type=float, default=0.2, help="The fraction of clients: C.")
+    parser.add_argument('--lr_decay', type=float, default=0.995, help="Learning rate decay each round.")
+    parser.add_argument('--dp_mechanism', type=str, default='Gaussian', choices=['no_dp', 'Gaussian', 'Laplace', 'MA'],
+                        help='Differential privacy mechanism to be used (e.g., no_dp, Gaussian, Laplace, MA).')
+    parser.add_argument('--dp_epsilon', type=float, default=20, help='Differential privacy epsilon.')
+    parser.add_argument('--dp_delta', type=float, default=1e-5, help='Differential privacy delta.')
+    parser.add_argument('--dp_clip', type=float, default=10, help='Differential privacy clipping parameter.')
+    parser.add_argument('--dp_sample', type=float, default=1,
+                        help='Sampling rate for moment accountant in MA mechanism.')
+    parser.add_argument('--serial', action='store_true', help='Enable serial computation to save GPU memory.')
+    parser.add_argument('--serial_bs', type=int, default=128, help='Batch size for serial computation.')
+    parser.add_argument('--group', type=str, default='control', choices=['control', 'fixed_dp', 'dynamic_dp'],
+                        help='Experiment group selection: control (no privacy measures), fixed_dp (fixed strength privacy), or dynamic_dp (dynamically adjusted privacy measures).')
+
+    # Paths
+    parser.add_argument('--datadir', type=str, required=False, default="./data/", help="Data directory")
+    parser.add_argument('--logdir', type=str, required=False, default="./logs/", help='Log directory path')
+    parser.add_argument('--modeldir', type=str, required=False, default="./models/", help='Model directory path')
+    parser.add_argument('--log_file_name', type=str, default=None, help='The log file name')
+    parser.add_argument('--device', type=str, default='cuda:0', help='The device to run the program')
+    parser.add_argument('--optimizer', type=str, default='sgd', help='the optimizer')
+
     args = parser.parse_args()
     return args
+
+
+def adapt_state_dict(state_dict, prefix='_module.'):
+    new_state_dict = {}
+    # Add or remove prefix based on the operation needed
+    for key, value in state_dict.items():
+        if prefix in key:
+            new_key = key[len(prefix):]  # Remove prefix
+            print("remove")
+        else:
+            new_key = prefix + key  # Add prefix
+            print("add")
+        new_state_dict[new_key] = value
+    return new_state_dict
+
 
 def init_nets(net_configs, dropout_p, n_parties, args):
 
@@ -792,37 +839,72 @@ def get_partition_dict(dataset, partition, n_parties, init_seed=0, datadir='./da
 
     return net_dataidx_map
 
+# if __name__ == '__main__':
+#     # torch.set_printoptions(profile="full")
+#     args = get_args()
+#     mkdirs(args.logdir)
+#     mkdirs(args.modeldir)
+#     if args.log_file_name is None:
+#         argument_path='experiment_arguments-%s.json' % datetime.datetime.now().strftime("%Y-%m-%d-%H:%M-%S")
+#     else:
+#         argument_path=args.log_file_name+'.json'
+#     with open(os.path.join(args.logdir, argument_path), 'w') as f:
+#         json.dump(str(args), f)
+#     device = torch.device(args.device)
+#     # logging.basicConfig(filename='test.log', level=logger.info, filemode='w')
+#     # logging.info("test")
+#     for handler in logging.root.handlers[:]:
+#         logging.root.removeHandler(handler)
+#
+#     if args.log_file_name is None:
+#         args.log_file_name = 'experiment_log-%s' % (datetime.datetime.now().strftime("%Y-%m-%d-%H:%M-%S"))
+#     log_path = args.log_file_name+'.log'
+#     logging.basicConfig(
+#         filename=os.path.join(args.logdir, log_path),
+#         # filename='/home/qinbin/test.log',
+#         format='%(asctime)s %(levelname)-8s %(message)s',
+#         datefmt='%m-%d %H:%M', level=logging.DEBUG, filemode='w')
+#
+#     logger = logging.getLogger()
+#     logger.setLevel(logging.DEBUG)
+#     logger.info(device)
 if __name__ == '__main__':
-    # torch.set_printoptions(profile="full")
     args = get_args()
     mkdirs(args.logdir)
     mkdirs(args.modeldir)
-    if args.log_file_name is None:
-        argument_path='experiment_arguments-%s.json' % datetime.datetime.now().strftime("%Y-%m-%d-%H:%M-%S")
-    else:
-        argument_path=args.log_file_name+'.json'
-    with open(os.path.join(args.logdir, argument_path), 'w') as f:
-        json.dump(str(args), f)
+
     device = torch.device(args.device)
-    # logging.basicConfig(filename='test.log', level=logger.info, filemode='w')
-    # logging.info("test")
+
+    # Set the default log file name if not provided
+    if args.log_file_name is None:
+        args.log_file_name = 'experiment_log-%s' % datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+
+    # Setup JSON argument file path
+    argument_path = args.log_file_name + '.json'
+    with open(os.path.join(args.logdir, argument_path), 'w') as f:
+        json.dump(vars(args), f)  # Use vars to properly serialize the argparse Namespace
+
+    # Remove all handlers associated with the root logger
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
 
-    if args.log_file_name is None:
-        args.log_file_name = 'experiment_log-%s' % (datetime.datetime.now().strftime("%Y-%m-%d-%H:%M-%S"))
-    log_path=args.log_file_name+'.log'
+    # Setup logging
+    log_path = args.log_file_name + '.log'
     logging.basicConfig(
         filename=os.path.join(args.logdir, log_path),
-        # filename='/home/qinbin/test.log',
         format='%(asctime)s %(levelname)-8s %(message)s',
-        datefmt='%m-%d %H:%M', level=logging.DEBUG, filemode='w')
+        datefmt='%m-%d-%H-%M', level=logging.DEBUG, filemode='w'
+    )
+    print(os.path.join(args.logdir, log_path))
 
+    # Get logger and set level
     logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
-    logger.info(device)
+    logger.setLevel(logging.INFO)
+    logger.info("Device: " + str(device))  # Changed to use the device variable directly
+
 
     seed = args.init_seed
+    print("Begin logging")
     logger.info("#" * 100)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -875,7 +957,13 @@ if __name__ == '__main__':
         global_models, global_model_meta_data, global_layer_type = init_nets(args.net_config, 0, 1, args)
         global_model = global_models[0]
 
+        if args.dp_mechanism != 'no_dp':
+            global_model = GradSampleModule(global_model)
+        global_model.train()
+
         global_para = global_model.state_dict()
+
+        global_para = adapt_state_dict(global_para, prefix='_module.')
         if args.is_same_initial:
             for net_id, net in nets.items():
                 net.load_state_dict(global_para)
@@ -888,6 +976,7 @@ if __name__ == '__main__':
             selected = arr[:int(args.n_parties * args.sample)]
 
             global_para = global_model.state_dict()
+            global_para = adapt_state_dict(global_para, prefix='_module.')
             if round == 0:
                 if args.is_same_initial:
                     for idx in selected:
@@ -896,7 +985,7 @@ if __name__ == '__main__':
                 for idx in selected:
                     nets[idx].load_state_dict(global_para)
 
-            local_train_net(nets, selected, args, net_dataidx_map, test_dl = test_dl_global, device=device)
+            # local_train_net(nets, selected, args, net_dataidx_map, test_dl = test_dl_global, device=device)
             # local_train_net(nets, args, net_dataidx_map, local_split=False, device=device)
 
             # update global model
@@ -904,6 +993,7 @@ if __name__ == '__main__':
             fed_avg_freqs = [len(net_dataidx_map[r]) / total_data_points for r in selected]
 
             for idx in range(len(selected)):
+                global_para = adapt_state_dict(global_para, prefix='_module.')
                 net_para = nets[selected[idx]].cpu().state_dict()
                 if idx == 0:
                     for key in net_para:
@@ -911,7 +1001,13 @@ if __name__ == '__main__':
                 else:
                     for key in net_para:
                         global_para[key] += net_para[key] * fed_avg_freqs[idx]
+            global_para = adapt_state_dict(global_para, prefix='_module.')
+            global_para = adapt_state_dict(global_para, prefix='_module.')
+            # print(global_para)
+            for name in global_model.state_dict():
+                print(name)
             global_model.load_state_dict(global_para)
+
 
             logger.info('global n_training: %d' % len(train_dl_global))
             logger.info('global n_test: %d' % len(test_dl_global))
